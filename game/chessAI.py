@@ -2,6 +2,7 @@ import chess
 import chess.polyglot
 import chess.pgn
 import io
+from .chaos import apply_move, load_state
 
 board = chess.Board()
 
@@ -178,3 +179,81 @@ def call_AI(pgn, level):
         g = chess.pgn.read_game(io.StringIO(pgn)).end()
         board = g.board()
     return selectmove(level)
+
+
+CHAOS_VALUES = {
+    chess.PAWN: 100, chess.KNIGHT: 320, chess.BISHOP: 330,
+    chess.ROOK: 500, chess.QUEEN: 900,
+}
+CHAOS_TABLES = {
+    chess.PAWN: pawntable, chess.KNIGHT: knightstable,
+    chess.BISHOP: bishopstable, chess.ROOK: rookstable,
+    chess.QUEEN: queenstable, chess.KING: kingstable,
+}
+
+
+def chaos_evaluation(board, raw_state):
+    if board.is_checkmate():
+        return -100000
+    if board.is_game_over(claim_draw=True):
+        return 0
+
+    state = load_state(raw_state)
+    score = 0
+    for square, piece in board.piece_map().items():
+        position = square if piece.color == chess.WHITE else chess.square_mirror(square)
+        value = CHAOS_VALUES.get(piece.piece_type, 0)
+        if value:
+            stamina = max(0, min(20, state.get(chess.square_name(square), 20)))
+            value *= 0.5 + stamina / 40
+        value += CHAOS_TABLES[piece.piece_type][position]
+        score += value if piece.color == board.turn else -value
+    return score
+
+
+def call_chaos_AI(fen, raw_state, level):
+    """Choose a move by searching the same stamina transitions as multiplayer."""
+    board = chess.Board(fen)
+    depth = max(1, min(3, int(level)))
+
+    def search(position, state, remaining, alpha, beta):
+        if remaining == 0 or position.is_game_over(claim_draw=True):
+            return chaos_evaluation(position, state)
+        best = -float('inf')
+        moves = sorted(position.legal_moves, key=position.is_capture, reverse=True)
+        for move in moves:
+            if move.promotion and move.promotion != chess.QUEEN:
+                continue  # apply_move uses automatic queen promotion.
+            try:
+                child_fen, child_state = apply_move(
+                    position.fen(), state, chess.square_name(move.from_square),
+                    chess.square_name(move.to_square), position.turn,
+                )
+            except ValueError:
+                continue
+            value = -search(chess.Board(child_fen), child_state, remaining - 1, -beta, -alpha)
+            best = max(best, value)
+            alpha = max(alpha, value)
+            if alpha >= beta:
+                break
+        return (0 if not position.is_check() else -100000) if best == -float('inf') else best
+
+    best_move = None
+    best_value = -float('inf')
+    alpha = -float('inf')
+    moves = sorted(board.legal_moves, key=board.is_capture, reverse=True)
+    for move in moves:
+        if move.promotion and move.promotion != chess.QUEEN:
+            continue
+        try:
+            child_fen, child_state = apply_move(
+                fen, raw_state, chess.square_name(move.from_square),
+                chess.square_name(move.to_square), board.turn,
+            )
+        except ValueError:
+            continue
+        value = -search(chess.Board(child_fen), child_state, depth - 1, -float('inf'), -alpha)
+        if value > best_value:
+            best_move, best_value = move, value
+            alpha = value
+    return best_move.uci() if best_move else None

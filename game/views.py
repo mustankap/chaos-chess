@@ -22,6 +22,7 @@ def index(request):
         g["link"] = f"/game/{i.pk}"
         g["owner"] = i.owner
         g["level"] = i.level
+        g["variant"] = i.variant
         pub.append(g)
     return render(request, "game/lobby.html", {"public":pub})
 
@@ -44,22 +45,37 @@ def game(request, game_id):
 
 @login_required
 def single(request):
-    return render(request, "game/single.html")
+    return render(request, "game/single.html", {
+        "chaos_mode": request.GET.get("variant") == "chaos",
+    })
 
 class createGame(LoginRequiredMixin, View):
     def get(self, request):
-        return render(request,"game/create.html")
+        games = Game.objects.filter(
+            Q(owner=request.user) | Q(opponent=request.user), opponent__isnull=False
+        ).select_related("owner", "opponent")
+        opponents = {
+            (game.opponent if game.owner == request.user else game.owner).id:
+            game.opponent if game.owner == request.user else game.owner
+            for game in games
+        }
+        return render(request, "game/create.html", {
+            "opponents": sorted(opponents.values(), key=lambda user: user.username.lower()),
+        })
     def post(self, request):
         username = request.POST["username"]
         side = request.POST["side"]
         level = request.POST["level"]
+        variant = request.POST.get("variant", "standard")
+        if variant not in ("standard", "chaos"):
+            variant = "standard"
         if username:
             try:
                 u = User.objects.get(username=username)
                 if u ==  request.user:
                     messages.add_message(request, messages.ERROR, "You can't play a game with yourself!")
                     return HttpResponseRedirect(reverse("create"))
-                g = Game(owner=request.user, opponent=u, owner_side=side, status=2)
+                g = Game(owner=request.user, opponent=u, owner_side=side, status=2, variant=variant)
                 g.save()
                 return HttpResponseRedirect('/game/'+str(g.pk))
             except Exception as e:
@@ -70,7 +86,7 @@ class createGame(LoginRequiredMixin, View):
             if level == "undef":
                 messages.add_message(request, messages.ERROR, "Please choose a level if you are creating a public room!")
                 return HttpResponseRedirect(reverse("create"))
-            l = Game(owner=request.user, owner_side=side, level=level)
+            l = Game(owner=request.user, owner_side=side, level=level, variant=variant)
             l.save()
             messages.add_message(request, messages.SUCCESS, "Game created and displayed in Lobby. Check Ongoing Games to see status")
             return HttpResponseRedirect(reverse("lobby"))

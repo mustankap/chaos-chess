@@ -14,10 +14,14 @@ Including another URLconf
     2. Add a URL to urlpatterns:  path('blog/', include('blog.urls'))
 """
 from django.contrib import admin
+from django.conf import settings
 from django.urls import path, include
+from django.contrib.staticfiles.urls import staticfiles_urlpatterns
 from game.views import index, game, single, createGame, register, ongoing, completed
+from pychess.health import health
 
 urlpatterns = [
+    path('healthz/', health),
     path('admin/', admin.site.urls),
     path('accounts/', include('django.contrib.auth.urls')),
     path('', index, name='lobby'),
@@ -28,3 +32,6 @@ urlpatterns = [
     path('ongoing/', ongoing, name = 'ongoing'),
     path('completed/', completed, name = 'completed'),
 ]
+
+if settings.DEBUG:
+    urlpatterns += staticfiles_urlpatterns()

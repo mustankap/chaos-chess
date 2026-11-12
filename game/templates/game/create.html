@@ -28,17 +28,26 @@
 {% endblock %}
 
 {% block body %}
+  <style>
+    .chaos-create { border: 1px solid #5d2b86; box-shadow: 0 5px 14px rgba(93, 43, 134, .18); }
+    .chaos-create:hover, .chaos-create:focus { background: #51267a; border-color: #51267a; }
+  </style>
   <div class="container mt-5 offset-2 col-8">
       <div>
         <form class="" action="{% url 'create' %}" method="POST">
           {% csrf_token %} 
           <div class="row">
             <div class="col-12 p-2">
-              <label for="username" class="form-label">Opponent Username (leave blank to display game on lobby) </label>
-              <div class="input-group">
-                <span class="input-group-text">@</span>
-                <input type="text" class="form-control" id="username" name="username" placeholder="Username">
-              </div>
+              <label for="username" class="form-label">Play a previous opponent</label>
+              <select class="custom-select" id="username" name="username">
+                <option value="">Create a public room instead</option>
+                {% for opponent in opponents %}
+                  <option value="{{ opponent.username }}">{{ opponent.username }}</option>
+                {% empty %}
+                  <option value="" disabled>No previous opponents yet</option>
+                {% endfor %}
+              </select>
+              <small class="form-text text-muted">Choose a player you have faced before, or leave public room selected.</small>
             </div>
             <div class="col-12 p-2">
               <label for="side" class="form-label">Side</label>
@@ -56,7 +65,11 @@
                 <option value="Advanced">Advanced</option>
               </select>
             </div>
-            <button class="btn btn-primary m-3" type="submit">Create Game</button>
+            <div class="col-12 mt-3">
+              <button class="btn btn-primary mr-2 mb-2" type="submit" name="variant" value="standard">Create standard game</button>
+              <button class="btn btn-primary chaos-create mb-2" type="submit" name="variant" value="chaos">Create Chaos Chess</button>
+              <p class="small text-muted mb-0">In Chaos Chess, moving pieces lose stamina and switch sides at zero.</p>
+            </div>
           </div>
         </form>
       </div>

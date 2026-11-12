@@ -12,6 +12,7 @@ https://docs.djangoproject.com/en/3.1/ref/settings/
 
 from pathlib import Path
 import os
+from django.core.exceptions import ImproperlyConfigured
 
 # Build paths inside the project like this: BASE_DIR / 'subdir'.
 BASE_DIR = Path(__file__).resolve().parent.parent
@@ -20,13 +21,28 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 # Quick-start development settings - unsuitable for production
 # See https://docs.djangoproject.com/en/3.1/howto/deployment/checklist/
 
-# SECURITY WARNING: keep the secret key used in production secret!
-SECRET_KEY = 'is#6^huv&o2mn#^*!pyy^(b-_-@#y%qsu#=qx++0!x^#k0!q&='
+# SECURITY WARNING: set SECRET_KEY in production.
+SECRET_KEY = os.environ.get('SECRET_KEY', 'django-insecure-local-development-only')
 
 # SECURITY WARNING: don't run with debug turned on in production!
-DEBUG = True
+DEBUG = os.environ.get('DEBUG', 'True').lower() == 'true'
 
-ALLOWED_HOSTS = ['*']
+ALLOWED_HOSTS = [host.strip() for host in os.environ.get(
+    'ALLOWED_HOSTS', 'localhost,127.0.0.1,[::1]'
+).split(',') if host.strip()]
+if not DEBUG:
+    if len(SECRET_KEY) < 50 or SECRET_KEY.startswith('django-insecure-'):
+        raise ImproperlyConfigured('Production requires a random SECRET_KEY of at least 50 characters.')
+    if not os.environ.get('ALLOWED_HOSTS') or not ALLOWED_HOSTS or '*' in ALLOWED_HOSTS:
+        raise ImproperlyConfigured('Production requires explicit ALLOWED_HOSTS.')
+    # Only Caddy can reach the app in the production Compose network.
+    SECURE_PROXY_SSL_HEADER = ('HTTP_X_FORWARDED_PROTO', 'https')
+    SECURE_SSL_REDIRECT = True
+    SECURE_HSTS_SECONDS = 31536000
+    SECURE_HSTS_INCLUDE_SUBDOMAINS = True
+    SECURE_HSTS_PRELOAD = True
+    SESSION_COOKIE_SECURE = True
+    CSRF_COOKIE_SECURE = True
 
 #AUTH_USER_MODEL = 'game.models.User'
 
@@ -36,6 +52,7 @@ LOGOUT_REDIRECT_URL = '/'
 # Application definition
 
 INSTALLED_APPS = [
+    'daphne',
     'django.contrib.admin',
     'django.contrib.auth',
     'django.contrib.contenttypes',
@@ -74,12 +91,12 @@ TEMPLATES = [
     },
 ]
 
-redis_host = os.environ.get('REDIS_HOST', 'localhost')
+REDIS_URL = os.environ.get('REDIS_URL', 'redis://' + os.environ.get('REDIS_HOST', 'localhost') + ':6379/0')
 CHANNEL_LAYERS = {
     "default": {
         "BACKEND": "channels_redis.core.RedisChannelLayer",
         "CONFIG": {
-            "hosts": [(redis_host, 6379)],
+            "hosts": [REDIS_URL],
         },
     },
 }
@@ -95,7 +112,7 @@ MESSAGE_TAGS = {
 }
 
 # ASGI_APPLICATION should be set to your outermost router
-ASGI_APPLICATION = 'pychess.routing.application'
+ASGI_APPLICATION = 'pychess.asgi.application'
 
 WSGI_APPLICATION = 'pychess.wsgi.application'
 
@@ -106,7 +123,9 @@ WSGI_APPLICATION = 'pychess.wsgi.application'
 DATABASES = {
     'default': {
         'ENGINE': 'django.db.backends.sqlite3',
-        'NAME': BASE_DIR / 'db.sqlite3',
+        'NAME': os.environ.get('DATABASE_PATH', BASE_DIR / 'db.sqlite3'),
+        # shortcut: one app instance; move to PostgreSQL before scaling writes.
+        'OPTIONS': {'timeout': 20},
     }
 }
 
@@ -148,3 +167,5 @@ USE_TZ = True
 # https://docs.djangoproject.com/en/3.1/howto/static-files/
 
 STATIC_URL = '/static/'
+STATIC_ROOT = os.environ.get('STATIC_ROOT', BASE_DIR / 'staticfiles')
+DEFAULT_AUTO_FIELD = 'django.db.models.AutoField'

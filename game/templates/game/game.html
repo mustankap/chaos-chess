@@ -36,6 +36,95 @@
 {% endblock %}
 
 {% block body %}
+  <style>
+    .chaos-rules {
+      display: none;
+      max-width: 400px;
+      margin: 0 auto 12px;
+      padding: 10px 14px;
+      color: #fff;
+      background: #211632;
+      border-left: 4px solid #8b5cf6;
+      border-radius: 0 8px 8px 0;
+      font-size: .82rem;
+      line-height: 1.35;
+    }
+    .chaos-rules strong { color: #d8b4fe; letter-spacing: .04em; }
+    #myBoard .square-55d63 { position: relative; }
+    .chaos-score {
+      position: absolute;
+      top: 1px;
+      right: 1px;
+      z-index: 4;
+      min-width: 14px;
+      height: 14px;
+      padding: 0 2px;
+      color: #fff;
+      background: #116149;
+      border: 1px solid rgba(255, 255, 255, .9);
+      border-radius: 3px;
+      box-shadow: 0 1px 2px rgba(0, 0, 0, .35);
+      font: 700 8px/12px Arial, sans-serif;
+      letter-spacing: -.02em;
+      text-align: center;
+      pointer-events: none;
+    }
+    .chaos-score--critical { background: #b45309; }
+    .chaos-score--defected { background: #6d28d9; }
+    .game-stage {
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 12px;
+      margin: 0 auto;
+      padding: 0 12px;
+    }
+    #myBoard {
+      width: min(400px, calc(100vw - 24px)) !important;
+      margin: 0 !important;
+    }
+    .capture-rail {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 8px;
+      width: min(400px, calc(100vw - 24px));
+    }
+    .capture-group {
+      min-height: 74px;
+      padding: 7px;
+      background: #f7f7f8;
+      border: 1px solid #d8d8df;
+      border-radius: 8px;
+    }
+    .capture-heading {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 6px;
+      color: #34323a;
+      font-size: .72rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .04em;
+    }
+    .capture-count {
+      min-width: 21px;
+      padding: 1px 6px;
+      color: #fff;
+      background: #34323a;
+      border-radius: 999px;
+      text-align: center;
+    }
+    .capture-pieces { display: flex; flex-wrap: wrap; min-height: 34px; margin-top: 5px; }
+    .capture-piece { width: 25px; height: 31px; margin: -2px -5px -2px 0; }
+    .capture-piece img { width: 100%; height: 100%; object-fit: contain; }
+    @media (min-width: 640px) {
+      .game-stage { flex-direction: row; justify-content: center; align-items: flex-start; }
+      #myBoard { width: 400px !important; }
+      .capture-rail { display: block; width: 126px; }
+      .capture-group + .capture-group { margin-top: 9px; }
+    }
+  </style>
   <div class="modal fade" id="gameModal" tabindex="-1" role="dialog" aria-hidden="true">
     <div class="modal-dialog">
       <div class="modal-content">
@@ -69,7 +158,22 @@
     </div>
   </div>
 
-  <div id="myBoard" style="width: 400px; margin-left: auto; margin-right: auto;" class="p-2"></div>
+  <div class="game-stage">
+    <div id="myBoard" class="p-2"></div>
+    <aside class="capture-rail" aria-label="Captured pieces" aria-live="polite">
+      <section class="capture-group">
+        <div class="capture-heading">White lost <span class="capture-count" id="whiteCapturedCount">0</span></div>
+        <div class="capture-pieces" id="whiteCaptured"></div>
+      </section>
+      <section class="capture-group">
+        <div class="capture-heading">Black lost <span class="capture-count" id="blackCapturedCount">0</span></div>
+        <div class="capture-pieces" id="blackCaptured"></div>
+      </section>
+    </aside>
+  </div>
+  <div class="chaos-rules" id="chaosRules" role="status" aria-live="polite">
+    <strong>CHAOS CHESS</strong> &mdash; every piece starts at 20. Pawn &minus;1, knight/bishop &minus;4, rook &minus;5, queen &minus;9. At 0, it defects to the other side.
+  </div>
   <div style="text-align: center">
     <button class="btn btn-danger" id="resign">Resign</button> <br>
     <b>Status:</b><p id="status">Please wait for connection establishment...</p>
@@ -90,6 +194,10 @@
   var $modalTitle = $('#modal-title')
   var $modalBody = $('#modal-body')
   var orientation = null
+  var chaosMode = false
+  var chaosState = {}
+  var awaitingChaosMove = false
+  var capturedPieces = []
 
   var whiteSquareGrey = '#a9a9a9'
   var blackSquareGrey = '#696969'
@@ -112,6 +220,8 @@
 
   function onDragStart (source, piece, position, orientation) {
     if (game.game_over()) return false
+    if (awaitingChaosMove) return false
+    if (!((orientation === 'white' && game.turn() === 'w') || (orientation === 'black' && game.turn() === 'b'))) return false
     return !((orientation === 'white' && piece.search(/^w/) === -1) || (orientation === 'black' && piece.search(/^b/) === -1));
   }
 
@@ -122,12 +232,20 @@
       promotion: 'q'
     })
     if (move === null) return 'snapback'
+    if (chaosMode) {
+      game.undo()
+      awaitingChaosMove = true
+      socket.send(JSON.stringify({"command": "new-move", "source": source, "target": target}))
+      return 'snapback'
+    }
+    addCapturedPiece(move)
     updateStatus()
     socket.send(JSON.stringify({"command": "new-move","source": source,"target": target,"fen": game.fen(), "pgn": game.pgn()}));
   }
 
   function onSnapEnd () {
     board.position(game.fen())
+    window.setTimeout(renderChaosScores, 0)
   }
 
   function onMouseoverSquare (square, piece) {
@@ -149,8 +267,59 @@
     removeGreySquares()
   }
 
-  function onSnapEnd () {
-    board.position(game.fen())
+  function renderChaosScores () {
+    $('#myBoard .chaos-score').remove()
+    if (!chaosMode) return
+    $('#myBoard .square-55d63').each(function () {
+      var squareClass = this.className.split(' ').filter(function (name) { return name.indexOf('square-') === 0 && name !== 'square-55d63' })[0]
+      if (!squareClass) return
+      var square = squareClass.replace('square-', '')
+      if (!game.get(square)) return
+      var score = chaosState[square] === undefined ? 20 : chaosState[square]
+      var scoreClass = score <= 0 ? ' chaos-score--defected' : score <= 5 ? ' chaos-score--critical' : ''
+      $(this).append($('<span>', { 'class': 'chaos-score' + scoreClass, 'aria-hidden': 'true', text: score }))
+    })
+  }
+
+  function renderCapturedPieces () {
+    var names = { p: 'pawn', n: 'knight', b: 'bishop', r: 'rook', q: 'queen', k: 'king' }
+    ;['white', 'black'].forEach(function (color) {
+      var pieces = capturedPieces.filter(function (captured) { return captured.color === color })
+      $('#' + color + 'CapturedCount').text(pieces.length)
+      var $pieces = $('#' + color + 'Captured').empty()
+      pieces.forEach(function (captured) {
+        var prefix = color === 'white' ? 'w' : 'b'
+        $('<span>', { 'class': 'capture-piece' }).append($('<img>', {
+          src: '/static/chessboard/' + prefix + captured.piece.toUpperCase() + '.png',
+          alt: 'Captured ' + color + ' ' + names[captured.piece]
+        })).appendTo($pieces)
+      })
+    })
+  }
+
+  function addCapturedPiece (move) {
+    if (!move || !move.captured) return
+    capturedPieces.push({ color: move.color === 'w' ? 'black' : 'white', piece: move.captured })
+    renderCapturedPieces()
+  }
+
+  function rebuildCapturedPieces () {
+    capturedPieces = game.history({ verbose: true }).filter(function (move) { return move.captured }).map(function (move) {
+      return { color: move.color === 'w' ? 'black' : 'white', piece: move.captured }
+    })
+    renderCapturedPieces()
+  }
+
+  function loadChaosState (fen, rawState) {
+    try { chaosState = rawState ? JSON.parse(rawState) : {} } catch (error) { chaosState = {} }
+    capturedPieces = chaosState._captured || []
+    if (game.load(fen)) {
+      board.position(game.fen())
+      updateStatus()
+      renderChaosScores()
+      renderCapturedPieces()
+    }
+    awaitingChaosMove = false
   }
 
   function updateStatus () {
@@ -205,7 +374,7 @@
     $pgn.html(game.pgn())
   }
 
-  updateStatus()
+    updateStatus()
 
   socket.onclose = function () {
     $modalTitle.html("Connection closed")
@@ -239,11 +408,18 @@
       }
       board = Chessboard('myBoard', config)
       orientation=data.orientation;
-      if(data.pgn){
+      chaosMode = data.variant === 'chaos'
+      if (chaosMode) {
+        $('#chaosRules').show()
+        loadChaosState(data.fen || game.fen(), data.chaos_state)
+      }
+      else if(data.pgn){
         game.load_pgn(data.pgn)
       }
       board.position(game.fen());
       updateStatus();
+      renderChaosScores();
+      if (!chaosMode) rebuildCapturedPieces()
       if(data.opp_online!=true) {
         $modalTitle.html("Please Wait...")
         $modalBody.html("Please wait for your opponent to connect to this game")
@@ -266,13 +442,21 @@
       });
     }
     else if(data.command=="new-move") {
-      game.move({
+      var move = game.move({
           from: data.source,
           to: data.target,
           promotion: 'q'
         });
+      addCapturedPiece(move)
       board.position(game.fen());
       updateStatus()
+    }
+    else if(data.command=="chaos-state") {
+      loadChaosState(data.fen, data.chaos_state)
+    }
+    else if(data.command=="invalid-move") {
+      awaitingChaosMove = false
+      board.position(game.fen())
     }
     else if(data.command=="opponent-resigned") {
       $modalTitle.html("Game over")

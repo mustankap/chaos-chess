@@ -36,6 +36,18 @@
 {% endblock %}
 
 {% block body %}
+  <style>
+    #myBoard .square-55d63 { position: relative; }
+    .chaos-score {
+      position: absolute; top: 1px; right: 1px; z-index: 4;
+      min-width: 14px; height: 14px; padding: 0 2px;
+      color: #fff; background: #116149; border: 1px solid #fff;
+      border-radius: 3px; font: 700 8px/12px Arial, sans-serif;
+      text-align: center; pointer-events: none;
+    }
+    .chaos-score--critical { background: #b45309; }
+    .chaos-score--defected { background: #6d28d9; }
+  </style>
   <div class="modal fade" id="gameModal" tabindex="-1" role="dialog" aria-hidden="true">
     <div class="modal-dialog">
       <div class="modal-content">
@@ -86,6 +98,11 @@
     </div>
   </div>
   <div class="alert alert-danger mx-2" style="text-align: center; display:none;" id="AI">Please wait for the AI to make a move <img src="/static/loading.gif" style="width:30px"></div>
+  <div class="text-center mb-2">
+    <a class="btn btn-sm {% if chaos_mode %}btn-outline-secondary{% else %}btn-primary{% endif %}" href="/single/">Standard chess</a>
+    <a class="btn btn-sm {% if chaos_mode %}btn-primary{% else %}btn-outline-secondary{% endif %}" href="/single/?variant=chaos">Chaos Chess</a>
+  </div>
+  {% if chaos_mode %}<p class="text-center small">Each piece starts at 20 points. Moves cost stamina; at zero, the piece switches sides.</p>{% endif %}
   <div id="myBoard" style="width: 400px; margin-left: auto; margin-right: auto;" class="p-2"></div>
   <div style="text-align: center">
     <button class="btn btn-danger m-1" id="resign">Resign</button> <button class="btn btn-success m-1" id="flip">Flip</button> <button class="btn btn-info m-1" id="undo">Undo</button>
@@ -102,7 +119,7 @@
 
   <script>
   var ws_scheme = window.location.protocol == "https:" ? "wss" : "ws";
-  var ws_path = ws_scheme + '://' + window.location.host + "/single/";
+  var ws_path = ws_scheme + '://' + window.location.host + "/single/" + ({{ chaos_mode|yesno:"true,false" }} ? "?variant=chaos" : "");
   console.log("Connecting to " + ws_path);
   var socket = new ReconnectingWebSocket(ws_path);
   var board = null
@@ -114,6 +131,9 @@
   var $modalBody = $('#modal-body')
   var orientation = null
   var level = 3
+  var chaosMode = false
+  var chaosState = {}
+  var awaitingChaosMove = false
 
   var whiteSquareGrey = '#a9a9a9'
   var blackSquareGrey = '#696969'
@@ -136,6 +156,7 @@
 
   function onDragStart (source, piece, position, orientation) {
     if (game.game_over()) return false
+    if (chaosMode && (awaitingChaosMove || game.turn() !== 'w')) return false
     return !((orientation === 'white' && piece.search(/^w/) === -1) || (orientation === 'black' && piece.search(/^b/) === -1));
   }
 
@@ -146,15 +167,17 @@
       promotion: 'q'
     })
     if (move === null) return 'snapback'
+    if (chaosMode) {
+      game.undo()
+      awaitingChaosMove = true
+      socket.send(JSON.stringify({"command": "new-move", "source": source, "target": target, "level": level}))
+      return 'snapback'
+    }
     updateStatus()
     socket.send(JSON.stringify({"command": "new-move", "pgn": game.pgn(), "level":level}));
     $("#AI").show(500);
     $("#flip").prop('disabled',true);
     $("#undo").prop('disabled',true);
-  }
-
-  function onSnapEnd () {
-    board.position(game.fen())
   }
 
   function onMouseoverSquare (square, piece) {
@@ -178,6 +201,32 @@
 
   function onSnapEnd () {
     board.position(game.fen())
+    window.setTimeout(renderChaosScores, 0)
+  }
+
+  function renderChaosScores () {
+    $('#myBoard .chaos-score').remove()
+    if (!chaosMode) return
+    $('#myBoard .square-55d63').each(function () {
+      var squareClass = this.className.split(' ').filter(function (name) { return name.indexOf('square-') === 0 && name !== 'square-55d63' })[0]
+      if (!squareClass) return
+      var square = squareClass.replace('square-', '')
+      if (!game.get(square)) return
+      var score = chaosState[square] === undefined ? 20 : chaosState[square]
+      var scoreClass = score <= 0 ? ' chaos-score--defected' : score <= 5 ? ' chaos-score--critical' : ''
+      $(this).append($('<span>', { 'class': 'chaos-score' + scoreClass, 'aria-hidden': 'true', text: score }))
+    })
+  }
+
+  function loadChaosState (data) {
+    try { chaosState = data.chaos_state ? JSON.parse(data.chaos_state) : {} } catch (error) { chaosState = {} }
+    if (game.load(data.fen)) {
+      board.position(game.fen())
+      updateStatus()
+      renderChaosScores()
+    }
+    awaitingChaosMove = !!data.ai_thinking
+    $('#AI').toggle(awaitingChaosMove)
   }
 
   function updateStatus () {
@@ -265,8 +314,21 @@
       }
       board = Chessboard('myBoard', config)
       orientation=data.orientation;
-      board.position(game.fen());
-      updateStatus();
+      chaosMode = data.variant === 'chaos'
+      if (chaosMode) {
+        $('#flip, #undo').hide()
+        loadChaosState(data)
+      } else {
+        board.position(game.fen());
+        updateStatus();
+      }
+    }
+    else if(data.command==="chaos-state") {
+      loadChaosState(data)
+    }
+    else if(data.command==="invalid-move") {
+      awaitingChaosMove = false
+      board.position(game.fen())
     }
     else if(data.command=="new-move") {
       game.move(
